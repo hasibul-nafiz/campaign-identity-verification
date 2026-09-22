@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Runtime data (SQLite DB, WAL files, debug frame dumps, uploaded badge images)
+data/
+
+# Uploaded campaign badge reference images
+assets/campaigns/
+
+# Model weights (downloaded separately, see README)
+models/*.onnx
+
+# Environment / secrets
+.env
+.env.local
+*.env.local
+frontend/.env
+!frontend/.env.example
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
