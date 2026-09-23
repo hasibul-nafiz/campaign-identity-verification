@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { assetUrl, detect } from "../api";
+import { detect, useAssetImage } from "../api";
 import type { Campaign, DetectResponse } from "../api";
 import { Camera } from "../components/Camera";
 import type { CameraHandle } from "../components/Camera";
@@ -102,10 +102,11 @@ export function DetectTab({ campaigns }: { campaigns: Campaign[] }) {
 
 function Results({ result }: { result: DetectResponse }) {
   const { badge, shirt, person, face } = result;
-  const referenceUrl =
+  const referencePath =
     badge?.matched_ref_id != null && result.campaign
-      ? assetUrl(`/campaigns/${result.campaign.id}/badges/${badge.matched_ref_id}/image`)
-      : assetUrl("/badge-ref");
+      ? `/campaigns/${result.campaign.id}/badges/${badge.matched_ref_id}/image`
+      : "/badge-ref";
+  const referenceUrl = useAssetImage(referencePath);
   return (
     <>
       <div
@@ -207,7 +208,7 @@ function Results({ result }: { result: DetectResponse }) {
         <div className="mt-3 grid grid-cols-2 gap-3">
           <figure>
             <img
-              src={referenceUrl}
+              src={referenceUrl ?? undefined}
               alt="Reference badge"
               className="h-36 w-full rounded-lg border border-slate-200 bg-slate-50 object-contain"
             />

@@ -85,6 +85,11 @@ class Settings:
     max_register_images: int
     max_badge_refs: int
 
+    auth_username: str
+    auth_password: str
+    jwt_secret: str
+    jwt_expire_minutes: int
+
     @classmethod
     def from_env(cls) -> "Settings":
         models = _path("MODEL_DIR", BASE_DIR / "models")
@@ -146,6 +151,10 @@ class Settings:
             debug=_str("DEBUG", "0") not in ("0", "", "false", "False"),
             max_register_images=_int("MAX_REGISTER_IMAGES", 5),
             max_badge_refs=_int("MAX_BADGE_REFS", 8),
+            auth_username=_str("AUTH_USERNAME", "admin"),
+            auth_password=_str("AUTH_PASSWORD", "admin"),
+            jwt_secret=_str("JWT_SECRET", "dev-secret-change-me-in-production-please"),
+            jwt_expire_minutes=_int("JWT_EXPIRE_MINUTES", 60),
         )
 
 

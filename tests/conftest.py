@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from app.auth import create_access_token
 from app.config import Settings
 from app.face import Face
 
@@ -10,6 +11,10 @@ from app.face import Face
 @pytest.fixture
 def settings() -> Settings:
     return Settings.from_env()
+
+
+def auth_header(cfg: Settings) -> dict:
+    return {"Authorization": f"Bearer {create_access_token(cfg.auth_username, cfg)}"}
 
 
 @pytest.fixture

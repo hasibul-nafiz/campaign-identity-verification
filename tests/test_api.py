@@ -14,7 +14,7 @@ from app.config import Settings
 from app.face import MultipleFacesError, NoFaceError
 from app.main import create_app
 from scripts.make_badge_ref import make_badge
-from tests.conftest import make_face, unit_vector
+from tests.conftest import auth_header, make_face, unit_vector
 
 POSE_FACES = {
     "front": make_face(nose=(60.0, 77.5)),
@@ -82,6 +82,7 @@ def engine() -> FakeEngine:
 def client(cfg: Settings, engine: FakeEngine):
     app = create_app(cfg, engine=engine, badge=BadgeMatcher(make_badge(), cfg))
     with TestClient(app) as c:
+        c.headers.update(auth_header(cfg))
         c.engine = engine
         yield c
 
@@ -341,6 +342,7 @@ class TestDebugFlag:
         engine = FakeEngine()
         app = create_app(cfg, engine=engine, badge=BadgeMatcher(make_badge(), cfg))
         with TestClient(app) as c:
+            c.headers.update(auth_header(cfg))
             c.engine = engine
             register(c, poses=("front",))
             engine.plans = [("front", unit_vector(0))]
@@ -486,6 +488,7 @@ class TestBadgeRef:
         cfg = Settings.from_env()
         app = create_app(cfg, engine=FakeEngine(), badge=BadgeMatcher(make_badge(), cfg))
         with TestClient(app) as c:
+            c.headers.update(auth_header(cfg))
             res = c.get("/badge-ref")
         assert res.status_code == 404
         assert "badge reference" in res.json()["detail"]

@@ -112,11 +112,14 @@ frontend/              Vite + React + TS client
 
 ## API
 
-All endpoints return JSON; errors are `{"detail": "..."}` with a 4xx status.
+All endpoints return JSON; errors are `{"detail": "..."}` with a 4xx status. Every route
+below except `/login` and `/health` requires a bearer token — see
+[Authentication](#authentication).
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness check |
+| POST | `/login` | Exchange username/password for a JWT |
 | GET | `/people` | List registered people |
 | POST | `/register` | Register a person (name + face photo(s)) |
 | DELETE | `/people/{id}` | Remove a person |
@@ -129,6 +132,24 @@ All endpoints return JSON; errors are `{"detail": "..."}` with a 4xx status.
 | DELETE | `/campaigns/{id}/badges/{badge_id}` | Remove a badge reference |
 | GET | `/campaigns/{id}/badges/{badge_id}/image` | Fetch a stored badge reference image |
 | GET | `/badge-ref` | Legacy single-badge reference (pre-campaigns) |
+
+## Authentication
+
+The API is gated behind a single set of credentials configured in the environment
+(`AUTH_USERNAME` / `AUTH_PASSWORD`, default `admin` / `admin` — change these before
+deploying anywhere real). `POST /login` (form fields `username`, `password`) returns a
+JWT:
+
+```bash
+curl -X POST http://localhost:8001/login -d "username=admin&password=admin"
+# {"access_token": "...", "token_type": "bearer"}
+```
+
+Send it as `Authorization: Bearer <token>` on every other request. Tokens expire after
+`JWT_EXPIRE_MINUTES` (default 60) and are signed with `JWT_SECRET` (set this to a long
+random value outside of local dev). The frontend handles this automatically: it shows a
+login screen, stores the token, attaches it to every request, and drops back to the
+login screen if a request comes back 401.
 
 ## Setup
 
@@ -180,3 +201,6 @@ overrides for badge inlier count and shirt ΔE are also available via the campai
 Set `DEBUG=1` to have every `/detect` call dump the raw frame and torso crop to
 `data/debug/last_detect.png` / `last_torso.png`, so a failed detection can be reproduced
 offline instead of only being visible as a screenshot.
+
+Auth-related settings: `AUTH_USERNAME`, `AUTH_PASSWORD`, `JWT_SECRET`,
+`JWT_EXPIRE_MINUTES` — see [Authentication](#authentication).

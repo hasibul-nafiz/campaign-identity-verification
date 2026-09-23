@@ -10,10 +10,11 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.auth import AuthError, authenticate, create_access_token, require_auth
 from app.badge import BadgeError, BadgeMatcher
 from app.campaigns import CampaignError, CampaignRegistry, reference_keypoints
 from app.config import Settings, get_settings
@@ -24,7 +25,8 @@ from app import shirt as shirt_mod
 from app.store import TemplateStore
 
 FRONT_POSE = "front"
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
+public_router = APIRouter()
 
 
 def domain_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -66,6 +68,7 @@ def create_app(
     )
     for exc_type in (FaceError, BadgeError, ShirtError, DatabaseError, CampaignError):
         instance.add_exception_handler(exc_type, domain_error_handler)
+    instance.include_router(public_router)
     instance.include_router(router)
     return instance
 
@@ -162,7 +165,19 @@ def seed_default_campaign(db: Database, registry: CampaignRegistry, cfg: Setting
     registry.rebuild()
 
 
-@router.get("/health")
+@public_router.post("/login")
+def login(
+    username: str = Form(...),
+    password: str = Form(...),
+    cfg: Settings = Depends(get_cfg),
+) -> Dict[str, Any]:
+    if not authenticate(username, password, cfg):
+        raise HTTPException(status_code=401, detail="invalid username or password")
+    token = create_access_token(username, cfg)
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@public_router.get("/health")
 def health(request: Request, cfg: Settings = Depends(get_cfg)) -> Dict[str, Any]:
     store: TemplateStore = request.app.state.store
     return {

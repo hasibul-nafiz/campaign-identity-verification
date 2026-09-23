@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import {
   addBadgeRefs,
-  assetUrl,
   createCampaign,
   deleteBadgeRef,
   deleteCampaign,
   getCampaign,
   updateCampaign,
+  useAssetImage,
 } from "../api";
-import type { Campaign, UploadRow } from "../api";
+import type { BadgeRefSummary, Campaign, UploadRow } from "../api";
 import { CaptureRef } from "../components/CaptureRef";
 import { CropPicker } from "../components/CropPicker";
 import { Modal } from "../components/Modal";
@@ -402,23 +402,7 @@ function Detail({
         </p>
         <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
           {(campaign.badge_refs ?? []).map((ref) => (
-            <figure key={ref.id} className="group relative">
-              <img
-                src={assetUrl(ref.url)}
-                alt={`reference ${ref.id}`}
-                className="h-24 w-full rounded-lg border border-slate-200 bg-slate-50 object-contain"
-              />
-              <figcaption className="mt-1 text-center text-[10px] text-slate-500">
-                {ref.keypoints} kp
-              </figcaption>
-              <button
-                type="button"
-                onClick={() => onDeleteRef(ref.id)}
-                className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 opacity-0 transition group-hover:opacity-100"
-              >
-                remove
-              </button>
-            </figure>
+            <BadgeRefThumb key={ref.id} badge={ref} onDelete={() => onDeleteRef(ref.id)} />
           ))}
           {(campaign.badge_refs?.length ?? 0) === 0 && (
             <p className="col-span-full rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
@@ -519,5 +503,28 @@ function Detail({
         </p>
       </div>
     </div>
+  );
+}
+
+function BadgeRefThumb({ badge, onDelete }: { badge: BadgeRefSummary; onDelete: () => void }) {
+  const src = useAssetImage(badge.url);
+  return (
+    <figure className="group relative">
+      <img
+        src={src ?? undefined}
+        alt={`reference ${badge.id}`}
+        className="h-24 w-full rounded-lg border border-slate-200 bg-slate-50 object-contain"
+      />
+      <figcaption className="mt-1 text-center text-[10px] text-slate-500">
+        {badge.keypoints} kp
+      </figcaption>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 opacity-0 transition group-hover:opacity-100"
+      >
+        remove
+      </button>
+    </figure>
   );
 }
