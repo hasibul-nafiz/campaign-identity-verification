@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { listCampaigns, listPeople } from "./api";
+import { getToken, listCampaigns, listPeople, logout, onUnauthorized } from "./api";
 import type { Campaign, Person } from "./api";
+import { Login } from "./components/Login";
 import { CampaignsTab } from "./tabs/CampaignsTab";
 import { DetectTab } from "./tabs/DetectTab";
 import { PeopleTab } from "./tabs/PeopleTab";
@@ -10,6 +11,17 @@ const TABS = ["Register", "Detect", "Campaigns", "People"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function App() {
+  const [authed, setAuthed] = useState(() => getToken() !== null);
+
+  useEffect(() => onUnauthorized(() => setAuthed(false)), []);
+
+  if (!authed) {
+    return <Login onLoggedIn={() => setAuthed(true)} />;
+  }
+  return <AuthedApp onLogout={() => { logout(); setAuthed(false); }} />;
+}
+
+function AuthedApp({ onLogout }: { onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>("Register");
   const [people, setPeople] = useState<Person[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -66,6 +78,13 @@ export default function App() {
               </button>
             ))}
           </nav>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            Sign out
+          </button>
         </div>
       </header>
 

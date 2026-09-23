@@ -1,5 +1,83 @@
+import { useEffect, useState } from "react";
+
 export const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8001";
+
+const TOKEN_KEY = "face_verify_token";
+let unauthorizedListeners: Array<() => void> = [];
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function setToken(token: string | null): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** Called whenever a request comes back 401, so the app can drop back to the login screen. */
+export function onUnauthorized(callback: () => void): () => void {
+  unauthorizedListeners.push(callback);
+  return () => {
+    unauthorizedListeners = unauthorizedListeners.filter((cb) => cb !== callback);
+  };
+}
+
+export function logout(): void {
+  setToken(null);
+}
+
+export async function login(username: string, password: string): Promise<void> {
+  const form = new FormData();
+  form.append("username", username);
+  form.append("password", password);
+  try {
+    const res = await fetch(`${API_BASE}/login`, { method: "POST", body: form });
+    const body = await parse<{ access_token: string; token_type: string }>(res);
+    setToken(body.access_token);
+  } catch (err) {
+    return failedToReach(err);
+  }
+}
+
+async function authFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  const headers = { ...(init.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  const res = await fetch(url, { ...init, headers });
+  if (res.status === 401) {
+    setToken(null);
+    unauthorizedListeners.forEach((cb) => cb());
+  }
+  return res;
+}
+
+/** Loads a protected image (badge references) as a blob URL, since <img> can't send headers. */
+export function useAssetImage(path: string | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!path) {
+      setUrl(null);
+      return;
+    }
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    authFetch(assetUrl(path))
+      .then((res) => (res.ok ? res.blob() : Promise.reject(new Error("failed to load image"))))
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setUrl(null);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [path]);
+  return url;
+}
 
 export type Pose = "front" | "left" | "right" | "up" | "down" | "unknown";
 
@@ -138,7 +216,7 @@ export async function registerPerson(
   form.append("name", name);
   images.forEach((blob, i) => form.append("images", blob, `pose_${i}.jpg`));
   try {
-    const res = await fetch(`${API_BASE}/register`, { method: "POST", body: form });
+    const res = await authFetch(`${API_BASE}/register`, { method: "POST", body: form });
     return await parse<RegisterResponse>(res);
   } catch (err) {
     return failedToReach(err);
@@ -155,7 +233,7 @@ export async function detect(
   if (campaignId !== undefined) form.append("campaign_id", String(campaignId));
   if (expectedColor) form.append("expected_color", expectedColor);
   try {
-    const res = await fetch(`${API_BASE}/detect`, { method: "POST", body: form });
+    const res = await authFetch(`${API_BASE}/detect`, { method: "POST", body: form });
     return await parse<DetectResponse>(res);
   } catch (err) {
     return failedToReach(err);
@@ -164,7 +242,7 @@ export async function detect(
 
 export async function listPeople(): Promise<Person[]> {
   try {
-    const res = await fetch(`${API_BASE}/people`);
+    const res = await authFetch(`${API_BASE}/people`);
     const body = await parse<{ people: Person[] }>(res);
     return body.people;
   } catch (err) {
@@ -174,7 +252,7 @@ export async function listPeople(): Promise<Person[]> {
 
 export async function deletePerson(id: number): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/people/${id}`, { method: "DELETE" });
+    const res = await authFetch(`${API_BASE}/people/${id}`, { method: "DELETE" });
     await parse<{ deleted: number }>(res);
   } catch (err) {
     return failedToReach(err);
@@ -183,7 +261,7 @@ export async function deletePerson(id: number): Promise<void> {
 
 export async function listCampaigns(): Promise<Campaign[]> {
   try {
-    const res = await fetch(`${API_BASE}/campaigns`);
+    const res = await authFetch(`${API_BASE}/campaigns`);
     return (await parse<{ campaigns: Campaign[] }>(res)).campaigns;
   } catch (err) {
     return failedToReach(err);
@@ -192,7 +270,7 @@ export async function listCampaigns(): Promise<Campaign[]> {
 
 export async function getCampaign(id: number): Promise<Campaign> {
   try {
-    return await parse<Campaign>(await fetch(`${API_BASE}/campaigns/${id}`));
+    return await parse<Campaign>(await authFetch(`${API_BASE}/campaigns/${id}`));
   } catch (err) {
     return failedToReach(err);
   }
@@ -208,7 +286,7 @@ export async function createCampaign(
   colors.forEach((c) => form.append("colors", c));
   images.forEach((b, i) => form.append("images", b, `ref_${i}.png`));
   try {
-    const res = await fetch(`${API_BASE}/campaigns`, { method: "POST", body: form });
+    const res = await authFetch(`${API_BASE}/campaigns`, { method: "POST", body: form });
     return await parse<Campaign & { uploads: UploadRow[] }>(res);
   } catch (err) {
     return failedToReach(err);
@@ -229,7 +307,7 @@ export async function updateCampaign(
   if (fields.shirt_delta_e_max !== undefined && fields.shirt_delta_e_max !== "")
     form.append("shirt_delta_e_max", String(fields.shirt_delta_e_max));
   try {
-    const res = await fetch(`${API_BASE}/campaigns/${id}`, { method: "PATCH", body: form });
+    const res = await authFetch(`${API_BASE}/campaigns/${id}`, { method: "PATCH", body: form });
     return await parse<Campaign>(res);
   } catch (err) {
     return failedToReach(err);
@@ -238,7 +316,7 @@ export async function updateCampaign(
 
 export async function deleteCampaign(id: number): Promise<void> {
   try {
-    await parse(await fetch(`${API_BASE}/campaigns/${id}`, { method: "DELETE" }));
+    await parse(await authFetch(`${API_BASE}/campaigns/${id}`, { method: "DELETE" }));
   } catch (err) {
     return failedToReach(err);
   }
@@ -251,7 +329,7 @@ export async function addBadgeRefs(
   const form = new FormData();
   images.forEach((b, i) => form.append("images", b, `ref_${i}.png`));
   try {
-    const res = await fetch(`${API_BASE}/campaigns/${id}/badges`, { method: "POST", body: form });
+    const res = await authFetch(`${API_BASE}/campaigns/${id}/badges`, { method: "POST", body: form });
     return await parse<Campaign & { uploads: UploadRow[] }>(res);
   } catch (err) {
     return failedToReach(err);
@@ -261,7 +339,7 @@ export async function addBadgeRefs(
 export async function deleteBadgeRef(campaignId: number, badgeId: number): Promise<void> {
   try {
     await parse(
-      await fetch(`${API_BASE}/campaigns/${campaignId}/badges/${badgeId}`, { method: "DELETE" }),
+      await authFetch(`${API_BASE}/campaigns/${campaignId}/badges/${badgeId}`, { method: "DELETE" }),
     );
   } catch (err) {
     return failedToReach(err);

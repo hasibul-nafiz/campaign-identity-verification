@@ -13,6 +13,7 @@ from app.config import Settings
 from app.db import Database
 from app.main import create_app
 from scripts.make_badge_ref import make_badge
+from tests.conftest import auth_header
 from tests.test_api import FakeEngine, plain_scene, register, scene_with_badge, upload
 
 
@@ -40,6 +41,7 @@ def client(cfg: Settings):
     engine = FakeEngine()
     app = create_app(cfg, engine=engine, badge=BadgeMatcher(make_badge(), cfg))
     with TestClient(app) as c:
+        c.headers.update(auth_header(cfg))
         c.engine = engine
         yield c
 
@@ -60,6 +62,7 @@ class TestSeeding:
         engine = FakeEngine()
         for _ in range(2):
             with TestClient(create_app(cfg, engine=engine, badge=BadgeMatcher(make_badge(), cfg))) as c:
+                c.headers.update(auth_header(cfg))
                 names = [x["name"] for x in c.get("/campaigns").json()["campaigns"]]
         assert names == ["Default"]
 
@@ -296,6 +299,7 @@ class TestDetectWithCampaigns:
         engine = FakeEngine()
         app = create_app(cfg, engine=engine, badge=BadgeMatcher(make_badge(), cfg))
         with TestClient(app) as c:
+            c.headers.update(auth_header(cfg))
             c.engine = engine
             register(c, poses=("front",))
             engine.plans = [("front", unit_vector(0))]
@@ -437,6 +441,7 @@ class TestBadgeAnywhere:
         engine = FakeEngine()
         app = create_app(cfg, engine=engine, badge=BadgeMatcher(make_badge(), cfg))
         with TestClient(app) as c:
+            c.headers.update(auth_header(cfg))
             c.engine = engine
             register(c, poses=("front",))
             engine.plans = [("front", unit_vector(0))]

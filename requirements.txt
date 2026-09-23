@@ -5,3 +5,4 @@ numpy
 pytest
 httpx
 python-multipart
+pyjwt
