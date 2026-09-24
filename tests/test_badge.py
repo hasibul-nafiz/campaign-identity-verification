@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from app import badge
-from app.config import Settings
+from app.config import BASE_DIR, Settings
 from scripts.make_badge_ref import make_badge
 
 
@@ -198,3 +198,91 @@ class TestBadgeFinishes:
         rng = np.random.default_rng(9)
         noise = self.glossy(rng.integers(0, 256, (500, 400, 3), dtype=np.uint8))
         assert not matcher.check(noise).ok
+
+
+class TestHardConditions:
+    """Distance and a shirt the colour of the badge, both seen on real captures."""
+
+    def worn_on(self, reference: np.ndarray, shirt_bgr, width: int, seed: int = 3) -> np.ndarray:
+        """Paste only the badge -- not the fabric it was photographed on -- onto a shirt."""
+        rng = np.random.default_rng(seed)
+        scene = np.empty((420, 560, 3), np.float32)
+        scene[:] = shirt_bgr
+        scene += rng.normal(0, 5, scene.shape[:2])[..., None]
+        mask = badge._foreground_mask(reference, Settings.from_env())
+        height = int(width * reference.shape[0] / reference.shape[1])
+        small = cv2.resize(reference, (width, height), interpolation=cv2.INTER_AREA)
+        keep = cv2.resize(mask.astype(np.float32), (width, height))[..., None]
+        region = scene[100 : 100 + height, 200 : 200 + width]
+        scene[100 : 100 + height, 200 : 200 + width] = small * keep + region * (1 - keep)
+        return np.clip(scene, 0, 255).astype(np.uint8)
+
+    def test_badge_is_separated_from_its_margin(self, reference, settings: Settings):
+        mask = badge._foreground_mask(reference, settings)
+        assert mask is not None
+        assert 0.25 < mask.mean() < 0.9
+        # The corners are fabric, the centre is badge.
+        assert mask[0, 0] == 0 and mask[-1, -1] == 0
+        assert mask[mask.shape[0] // 2, mask.shape[1] // 2] == 1
+
+    def test_tight_crop_keeps_everything(self, reference, settings: Settings):
+        """No uniform margin means no background to remove."""
+        rng = np.random.default_rng(1)
+        busy = rng.integers(0, 256, reference.shape, dtype=np.uint8)
+        assert badge._foreground_mask(busy, settings) is None
+
+    def test_colour_check_ignores_the_shirt(self, reference, settings: Settings):
+        """The reference's fabric must not decide whether the colours agree."""
+        mask = badge._foreground_mask(reference, settings)
+        on_navy = reference.copy()
+        on_navy[mask == 0] = (110, 40, 20)
+        masked = float(np.dot(
+            badge._chroma_signature(reference, mask=mask),
+            badge._chroma_signature(on_navy, mask=mask),
+        ))
+        unmasked = float(np.dot(
+            badge._chroma_signature(reference), badge._chroma_signature(on_navy)
+        ))
+        assert masked > 0.9
+        assert masked - unmasked > 0.1
+
+    @pytest.mark.parametrize("shirt,width", [
+        ((200, 110, 20), 45), ((200, 110, 20), 60), ((90, 40, 20), 45), ((30, 30, 30), 50),
+    ])
+    def test_real_badge_on_a_shirt_of_its_own_colour(self, settings: Settings, shirt, width):
+        """The real crest has a blue rim. On a blue shirt that rim -- its outline -- is
+        gone, and the colour check used to be dragged down by the white fabric the
+        reference photo was taken on."""
+        real = cv2.imread(str(BASE_DIR / "assets" / "badge_ref.png"), cv2.IMREAD_COLOR)
+        result = badge.BadgeMatcher(real, settings).check(self.worn_on(real, shirt, width, seed=1))
+        assert result.ok, f"{shirt} {width}px: {result.inliers} inliers, {result.reason}"
+
+
+class TestZoom:
+    def test_small_region_is_enlarged(self, settings: Settings):
+        crop = np.zeros((200, 148, 3), np.uint8)
+        zoomed, factor = badge.zoom_for_search(crop, settings)
+        assert factor == pytest.approx(settings.badge_zoom_target / 200)
+        assert max(zoomed.shape[:2]) == settings.badge_zoom_target
+
+    def test_zoom_is_capped(self, settings: Settings):
+        zoomed, factor = badge.zoom_for_search(np.zeros((40, 30, 3), np.uint8), settings)
+        assert factor == settings.badge_zoom_max
+        assert zoomed.shape[:2] == (120, 90)
+
+    def test_large_region_is_left_alone(self, settings: Settings):
+        crop = np.zeros((720, 1280, 3), np.uint8)
+        zoomed, factor = badge.zoom_for_search(crop, settings)
+        assert factor == 1.0 and zoomed is crop
+
+    def test_zoom_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("BADGE_ZOOM_TARGET", "0")
+        crop = np.zeros((100, 100, 3), np.uint8)
+        assert badge.zoom_for_search(crop, Settings.from_env()) == (crop, 1.0)
+
+    def test_zoom_finds_a_badge_too_small_to_match(self, matcher, reference):
+        scene = np.full((200, 148, 3), 252, np.uint8)
+        scene[60:95, 50:78] = cv2.resize(reference, (28, 35), interpolation=cv2.INTER_AREA)
+        assert not matcher.check(scene).ok
+        zoomed, _ = badge.zoom_for_search(scene, matcher.settings)
+        assert matcher.check(zoomed).ok
