@@ -448,6 +448,30 @@ class TestGeometry:
             assert -5 <= x <= width + 5
             assert -5 <= y <= height + 5
 
+    def test_distant_badge_is_found_by_zooming_the_torso(self, client):
+        """28px wide: too small for the frame search, found once the torso is enlarged."""
+        img = np.full((500, 400, 3), 252, np.uint8)
+        img[200:235, 50:78] = cv2.resize(make_badge(), (28, 35), interpolation=cv2.INTER_AREA)
+        register(client, poses=("front",))
+        client.engine.plans = [("front", unit_vector(0))]
+        body = client.post(
+            "/detect", files={"image": upload(data=cv2.imencode(".png", img)[1].tobytes())}
+        ).json()
+        assert body["badge"]["ok"] is True, body["badge"]
+        assert body["badge"]["searched"] == "torso-zoom"
+        # The polygon is in original pixels, not the enlarged torso's.
+        xs = [p[0] for p in body["badge"]["box"]]
+        ys = [p[1] for p in body["badge"]["box"]]
+        assert min(xs) == pytest.approx(50, abs=6) and max(xs) == pytest.approx(78, abs=6)
+        assert min(ys) == pytest.approx(200, abs=6) and max(ys) == pytest.approx(235, abs=6)
+
+    def test_failed_zoom_does_not_replace_the_report(self, client):
+        register(client, poses=("front",))
+        client.engine.plans = [("front", unit_vector(0))]
+        body = client.post("/detect", files={"image": upload(data=plain_scene())}).json()
+        assert body["badge"]["ok"] is False
+        assert body["badge"]["searched"] == "frame"
+
     def test_badge_geometry_survives_a_downscale(self, client):
         """1600x2000 upload: badge must be located in ORIGINAL pixels, not 960px ones."""
         big = np.full((2000, 1600, 3), 252, np.uint8)

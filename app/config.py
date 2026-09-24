@@ -66,6 +66,9 @@ class Settings:
     badge_max_area_ratio: float
     badge_max_edge_ratio: float
     badge_max_aspect_skew: float
+    badge_bg_delta: float
+    badge_zoom_target: int
+    badge_zoom_max: float
 
     shirt_k: int
     shirt_size: int
@@ -131,6 +134,9 @@ class Settings:
             badge_max_area_ratio=_float("BADGE_MAX_AREA_RATIO", 1.5),
             badge_max_edge_ratio=_float("BADGE_MAX_EDGE_RATIO", 8.0),
             badge_max_aspect_skew=_float("BADGE_MAX_ASPECT_SKEW", 2.5),
+            badge_bg_delta=_float("BADGE_BG_DELTA", 18.0),
+            badge_zoom_target=_int("BADGE_ZOOM_TARGET", 480),
+            badge_zoom_max=_float("BADGE_ZOOM_MAX", 3.0),
             shirt_k=_int("SHIRT_K", 4),
             shirt_size=_int("SHIRT_SIZE", 64),
             shirt_delta_e_max=_float("SHIRT_DELTA_E_MAX", 14.0),

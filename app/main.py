@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.auth import AuthError, authenticate, create_access_token, require_auth
-from app.badge import BadgeError, BadgeMatcher
+from app.badge import BadgeError, BadgeMatcher, zoom_for_search
 from app.campaigns import CampaignError, CampaignRegistry, reference_keypoints
 from app.config import Settings, get_settings
 from app.db import Database, DatabaseError
@@ -378,25 +378,38 @@ def detect(
     # searched when the torso comes up empty. The shirt check always uses the torso,
     # because that is what the shirt colour means.
     regions = {
-        "torso": [(torso, (ox0, oy0))],
-        "frame": [(frame.original, (0, 0))],
+        "torso": [(torso, (ox0, oy0), 1.0, "torso")],
+        "frame": [(frame.original, (0, 0), 1.0, "frame")],
     }.get(
         cfg.badge_search_region,
-        [(torso, (ox0, oy0)), (frame.original, (0, 0))],
+        [(torso, (ox0, oy0), 1.0, "torso"), (frame.original, (0, 0), 1.0, "frame")],
     )
+    # Last resort for a distant wearer: the torso, enlarged. Only tried when everything
+    # else failed, and only kept if it succeeds, so it never replaces a better report.
+    zoomed, zoom = zoom_for_search(torso, cfg)
+    if zoom > 1.0:
+        regions.append((zoomed, (ox0, oy0), zoom, "torso-zoom"))
 
     candidates: List[Dict[str, Any]] = []
     searched = ""
+    badge_scale = 1.0
     with timer.mark("badge"):
         badge_match = None
-        for index, (badge_region, badge_origin) in enumerate(regions):
-            searched = "torso" if badge_region is torso else "frame"
-            if campaign is not None:
-                badge_match = registry.check_badge(campaign.campaign.id, badge_region)
+        for badge_region, origin, scale, name in regions:
+            if campaign_id is not None:
+                attempt = registry.check_badge(campaign.campaign.id, badge_region)
+                ranked_campaign = campaign
             else:
                 ranked = registry.identify(badge_region)
                 if not ranked:
                     raise CampaignError("no active campaign has a badge reference image")
+                attempt = ranked[0].match
+                ranked_campaign = ranked[0].campaign
+            if badge_match is not None and not attempt.result.ok and name == "torso-zoom":
+                break
+            badge_match, badge_origin, badge_scale, searched = attempt, origin, scale, name
+            chosen = ranked_campaign
+            if campaign_id is None:
                 candidates = [
                     {
                         "id": c.campaign.campaign.id,
@@ -406,12 +419,10 @@ def detect(
                     }
                     for c in ranked[:5]
                 ]
-                badge_match = ranked[0].match
-                if badge_match.result.ok or index == len(regions) - 1:
-                    campaign = ranked[0].campaign
             if badge_match.result.ok:
                 break
     assert badge_match is not None
+    campaign = chosen
     badge_result = badge_match.result
     response["campaign"] = campaign_block(campaign, campaign_id is None)
     if candidates:
@@ -427,9 +438,10 @@ def detect(
 
     badge_polygon = None
     if badge_result.quad is not None:
-        # The crop is already full-resolution, so the quad only needs the torso origin.
+        # The crop is full-resolution unless it was zoomed, so undo the zoom and then
+        # add the region's origin.
         badge_polygon = [
-            [int(round(px)) + badge_origin[0], int(round(py)) + badge_origin[1]]
+            [int(round(px / badge_scale)) + badge_origin[0], int(round(py / badge_scale)) + badge_origin[1]]
             for px, py in badge_result.quad
         ]
         response["badge_crop_b64"] = crop_polygon_b64(frame.original, badge_polygon)

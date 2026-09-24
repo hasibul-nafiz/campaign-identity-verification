@@ -206,20 +206,78 @@ def _quad_is_sane(
     return True, "ok"
 
 
-def _chroma_signature(bgr: np.ndarray, size: int = 24) -> Optional[np.ndarray]:
+def _foreground_mask(bgr: np.ndarray, cfg: Settings) -> Optional[np.ndarray]:
+    """Which pixels of the reference are badge rather than the shirt it was photographed on.
+
+    A reference is usually a photo of the badge being worn, so its margin is fabric. That
+    fabric is not part of the badge: on a different shirt it is a different colour, and on
+    a shirt the colour of the badge's own rim it disappears altogether. Left in, it drags
+    the colour check down and seeds keypoints on a weave that will never be there again.
+
+    The margin is recognised as the colour the reference's border agrees on. A reference
+    cropped tight to the badge has no such agreement, and then the whole image is kept.
+    """
+    if bgr is None or bgr.ndim != 3:
+        return None
+    lab = cv2.cvtColor(bgr[:, :, :3], cv2.COLOR_BGR2LAB).astype(np.float32)
+    h, w = lab.shape[:2]
+    band = max(2, round(min(h, w) * 0.03))
+    border = np.concatenate([
+        lab[:band].reshape(-1, 3), lab[-band:].reshape(-1, 3),
+        lab[:, :band].reshape(-1, 3), lab[:, -band:].reshape(-1, 3),
+    ])
+    background = np.median(border, axis=0)
+    distance = np.linalg.norm(lab - background, axis=2)
+    if float(np.mean(np.linalg.norm(border - background, axis=1) < cfg.badge_bg_delta)) < 0.8:
+        return None
+
+    mask = (distance > cfg.badge_bg_delta).astype(np.uint8)
+    close = max(3, round(min(h, w) * 0.03)) | 1
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close, close), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if count < 2:
+        return None
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    mask = (labels == largest).astype(np.uint8)
+    # Print inside the badge that happens to match the fabric is still badge.
+    outside = mask.copy()
+    cv2.floodFill(outside, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 1)
+    mask |= 1 - outside
+
+    fill = float(mask.mean())
+    if fill < cfg.badge_ref_min_fill * 0.5 or fill > 0.97:
+        return None
+    return mask
+
+
+def _chroma_signature(
+    bgr: np.ndarray, size: int = 24, mask: Optional[np.ndarray] = None
+) -> Optional[np.ndarray]:
     """A coarse map of *colour* across the badge, ignoring brightness.
 
     Below roughly 70px of badge width there is no longer enough print detail for SIFT
     to reach a confident inlier count, but the badge's colour layout -- navy wordmark,
     red arrow, cyan arrow, gold field -- survives far smaller. Lab's a/b channels carry
     that layout while dropping L, which is exactly the channel a mirror finish ruins.
+
+    With a mask only the badge's own cells count, so the shirt around it -- which is
+    whatever colour the wearer chose -- cannot vote.
     """
     if bgr is None or bgr.size == 0 or bgr.ndim != 3:
         return None
     lab = cv2.cvtColor(bgr[:, :, :3], cv2.COLOR_BGR2LAB)
     small = cv2.resize(lab, (size, size), interpolation=cv2.INTER_AREA).astype(np.float32)
-    ab = small[:, :, 1:3].reshape(-1)
-    ab -= ab.mean()
+    ab = small[:, :, 1:3]
+    if mask is not None:
+        keep = cv2.resize(mask.astype(np.float32), (size, size), interpolation=cv2.INTER_AREA) > 0.5
+        if not keep.any():
+            return None
+        ab = ab - ab[keep].mean(axis=0)
+        ab[~keep] = 0.0
+        ab = ab.reshape(-1)
+    else:
+        ab = ab.reshape(-1)
+        ab -= ab.mean()
     norm = float(np.linalg.norm(ab))
     return ab / norm if norm > 1e-6 else None
 
@@ -264,6 +322,24 @@ def _fit(
     return best_inliers, best_quad, best_matrix, best_reason
 
 
+def zoom_for_search(crop: np.ndarray, cfg: Settings) -> Tuple[np.ndarray, float]:
+    """Enlarge a small search region so a distant badge has pixels for SIFT to work with.
+
+    At a few metres the badge is 30-50px wide, below where the smallest reference level
+    still finds inliers. Upscaling invents no detail, but it moves the badge's print up
+    into the scale range SIFT's pyramid actually samples. Only small regions are grown:
+    the whole frame is never worth the cost, and a near torso does not need it.
+    Returns the image and the factor it was scaled by, so a quad can be mapped back.
+    """
+    if crop is None or crop.size == 0 or cfg.badge_zoom_target <= 0:
+        return crop, 1.0
+    factor = min(cfg.badge_zoom_max, cfg.badge_zoom_target / float(max(crop.shape[:2])))
+    if factor <= 1.05:
+        return crop, 1.0
+    size = (round(crop.shape[1] * factor), round(crop.shape[0] * factor))
+    return cv2.resize(crop, size, interpolation=cv2.INTER_CUBIC), factor
+
+
 class BadgeMatcher:
     """Reference SIFT features are computed once at construction."""
 
@@ -287,6 +363,14 @@ class BadgeMatcher:
         # One fixed reference size only matches badges that happen to appear at roughly
         # that scale; anything much smaller or larger degenerates. Descriptors are built
         # at several scales instead, so the badge can be any size on screen.
+        self._mask = _foreground_mask(reference, cfg)
+        sift_mask = None
+        if self._mask is not None:
+            # Keep a thin ring of margin so the badge's outline still yields keypoints
+            # wherever the shirt does contrast with it.
+            ring = max(3, round(min(self._mask.shape) * 0.04)) | 1
+            sift_mask = cv2.dilate(self._mask, np.ones((ring, ring), np.uint8)) * 255
+
         self._levels: List[_Level] = []
         for variant in VARIANTS:
             gray = _prepare(reference, variant)
@@ -298,7 +382,10 @@ class BadgeMatcher:
                     (max(1, round(gray.shape[1] * factor)), max(1, round(gray.shape[0] * factor))),
                     interpolation=cv2.INTER_AREA,
                 )
-                keypoints, descriptors = self._sift.detectAndCompute(scaled, None)
+                level_mask = None if sift_mask is None else cv2.resize(
+                    sift_mask, (scaled.shape[1], scaled.shape[0]), interpolation=cv2.INTER_NEAREST
+                )
+                keypoints, descriptors = self._sift.detectAndCompute(scaled, level_mask)
                 if descriptors is None or len(keypoints) < 4:
                     continue
                 if cfg.badge_rootsift:
@@ -318,7 +405,7 @@ class BadgeMatcher:
         if not self._levels:
             raise BadgeError("badge reference has too little texture for SIFT")
         self._ref_shape = self._levels[0].shape
-        self._ref_sig = _chroma_signature(reference)
+        self._ref_sig = _chroma_signature(reference, mask=self._mask)
         self._preferred = 0
 
     @property
@@ -399,7 +486,7 @@ class BadgeMatcher:
             return None
         height, width = level.shape
         warped = cv2.warpPerspective(colour, inverse, (width, height))
-        signature = _chroma_signature(warped)
+        signature = _chroma_signature(warped, mask=self._mask)
         if signature is None:
             return None
         return float(np.dot(self._ref_sig, signature))
